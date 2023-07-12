@@ -1,0 +1,10 @@
+*.swp
+*.exe
+*.out
+*.dSYM
+*.pdb
+*test_fft
+*test_simd_helpers
+*.build
+*.vscode
+tmp/
