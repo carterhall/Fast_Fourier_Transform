@@ -17,9 +17,6 @@ SEED_FOR_CORRECTNESS_TESTING :: 1337;
 PRINT_ARRAYS :: false;
 BENCHMARK_ITERS :: 100;
 
-// For benchmarking and validation
-#if OS == .WINDOWS && true { #load "muFFT/muFFT_windows.jai"; }
-
 assert_allclose :: (x: [] $T, target: [] T, N := 1, epsilon := 1.0e-3, header := "Output mismatch:") {
   norm :: (x: Complex) -> float { return length(x); }
   norm :: (x: float32) -> float { return abs(x); }
