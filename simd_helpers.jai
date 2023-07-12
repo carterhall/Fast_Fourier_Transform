@@ -10,26 +10,13 @@
 // that will cause it to be overwritten if you use the wrong calling order.
 //
 
-//
-// Note: Jai is 64-bit only, and it seems that all x64 CPUs support SSE at minimum, so
-// we should be able to use xmm regs in any case.
-//
-// For now this looks kind of hacky: we are saying, if we *don't* support SSE, use SSE to do
-// a scalar operation. What would be a better name than NONE?
-
-// ... Actually, we don't want scalar. We want to do a pair of float32s at minimum.
-// So I think that means, we do math on the entire register, but our load/store/mov functions
-// pretend that they're operating on a double-precision scalar.
-//
-
-
 // This makes it clearer that we might call a smaller one even if we support AVX etc, and 
 // that at sizes 64 and 128, we may or may not be able to use SSE3 instructions.
 // It is ordered by size, so that some of the checks can be less-than, greater-than, etc.
 Mode :: enum { NO_SIMD; SSE_64; SSE3_64; SSE_128; SSE3_128; AVX; AVX512; }
 
 complex_mul :: (out: __reg, in0: __reg, in1: __reg, $mode: Mode) #expand {
-  _one := 1.0; // @Incomplete see if we can cast this to int to save regs
+  _one := 1.0; // @Speed see if we can cast this to int to save regs
   one := *_one;
 
   #if mode == .AVX512  #asm AVX512F {
@@ -142,68 +129,3 @@ complex_mov :: (out: __reg, in: __reg, $mode: Mode) #expand {
   else #if mode >= .SSE_128  #asm SSE      { movaps.x out, in; } 
   else                       #asm SSE      { movsd    out, in; }
 }
-
-
-
-/*
-// Should be significantly faster than actual complex multiplication by j.
-// @Incomplete, doesn't actually work yet.
-complex_mul_by_j :: (out: __reg, in: __reg, $simd: SIMD_Support) #expand {
-  #if simd == .AVX {
-    mask := s32.[0x80000000, 0, 0x80000000, 0, 0x80000000, 0, 0x80000000, 0];
-    mask_mem := mask.data;
-    #asm AVX {
-      tmp: vec;
-      movaps.y out, in;
-      movups.y tmp, [mask_mem];
-      xorps.y out, out, tmp;
-      permilps.y out, out, 0xb1;
-    }
-  }
-  else #if simd == .SSE3 {
-    mask := s32.[0x80000000, 0, 0x80000000, 0];
-    mask_mem := mask.data;
-    #asm SSE3 {
-      tmp: vec;
-      movaps.x out, in;
-      movups.x tmp, [mask_mem];
-      //xorps.x out, tmp;
-      //movhlps tmp, out; 
-      //shufps out, tmp, 0xb1;
-    }
-  }
-  else {
-    #assert(false); 
-  }
-}
-*/
-
-
-/*
-complex_conj :: (out: __reg, in: __reg, $mode: Mode) #expand {
-  multiplier := float32.[
-    1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0,
-    1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0,
-  ];
-  multiplier_data := multiplier.data;
-
-  #if mode == .AVX512  #asm AVX512F {
-    // @Incomplete
-  }
-  else #if mode == .AVX  #asm AVX {
-    // @Incomplete
-  }
-  else #if mode == .SSE3_128 || mode == .SSE3_64  #asm SSE3 {
-    v1: vec;
-    movups.x  v1, [multiplier_data];
-    movups.x  out, in;
-    mulps.x   out, v1; 
-  }
-  else #if mode == .SSE_128 || mode == .SSE_64  #asm SSE {
-    // @Incomplete
-  }
-}
-*/
-
-//#scope_file
-//#import "Math";
