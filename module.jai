@@ -1,31 +1,32 @@
 #module_parameters(MAX_SIZE_TO_PRECOMPUTE := 0, DISABLE_ASSERTS := false);
 
-#load "simd_helpers.jai";
-SIMD_Support :: enum { UNKNOWN; NONE; SSE; SSE3; AVX; AVX512; }
-
 // These constants are named here for clarity, but they cannot be changed: this FFT implementation
 // is hardcoded for radix-8, with a base case DFT at size 4 and below.
 RADIX :: 8;  
-BASE_CASE_MAX_SIZE :: 4;
 LOG2_RADIX :: #run log2(RADIX);
+BASE_CASE_MAX_SIZE :: 4;
+
+SIMD_Support :: enum { UNKNOWN; NONE; SSE; SSE3; AVX; AVX512; }
+simd_support := SIMD_Support.UNKNOWN;  // Set on first forward() or inverse() call
 
 FFT_Data :: struct { 
   forward_twiddles, inverse_twiddles, real_signal_twiddles: [] Complex;
   max_complex_transform_size: int;
 }
 
-simd_support := SIMD_Support.UNKNOWN;  // Set on first forward() or inverse() call
-
-// Jai is awesome! We can bake precomputed FFT_Data structs into the executable, to
-// yield an extremely simple API for more casual use.
-#if MAX_SIZE_TO_PRECOMPUTE > 0  global_fft :: #run prepare_fft(MAX_SIZE_TO_PRECOMPUTE, true);
-else global_fft: FFT_Data;
-
-// Easy global API (just calls the below functions with a global FFT_Data struct)
+//
+// The easy, global API (just calls the below functions with a global FFT_Data struct.)
+//
 forward :: (signal: [] $T, spectrum: [] Complex) { forward(*global_fft, signal, spectrum); }
 inverse :: (spectrum: [] Complex, signal: [] $T) { inverse(*global_fft, spectrum, signal); }
 
-// Normal FFT API
+// Jai is awesome! We can bake precomputed FFT_Data structs into the executable.
+#if MAX_SIZE_TO_PRECOMPUTE > 0  global_fft :: #run prepare_fft(MAX_SIZE_TO_PRECOMPUTE, true);
+else global_fft: FFT_Data;
+
+//
+// Normal FFT API: forward() and inverse(); prepare_fft() and free_fft().
+//
 forward :: (fft_data: *FFT_Data, signal: [] $T, spectrum: [] Complex) {
   run_fft(fft_data, signal, spectrum, true);
 }
@@ -59,7 +60,15 @@ free_fft :: (using fft_data: *FFT_Data) {
   array_free(real_signal_twiddles);
 }
 
+//
+// This function takes parameters from the above API functions, and performs the required FFT, handling
+// real/complex signals, forward/inverse transforms, and various input sizes.
+//
+// It uses the Stockham autosort algorithm, using the input buffer as temporary workspace to calculate
+// the outputs, requiring no other memory accesses (besides the precomputed twiddle factors.)
+//
 run_fft :: (using fft_data: *FFT_Data, signal: [] $T, spectrum: [] Complex, $forward: bool) {
+  // This check will only ever happen if you use the easy global API.
   if simd_support == .UNKNOWN  simd_support = check_simd_support();
 
   #if !DISABLE_ASSERTS {
@@ -84,11 +93,12 @@ run_fft :: (using fft_data: *FFT_Data, signal: [] $T, spectrum: [] Complex, $for
   outer_transform_size := total_input_size;
   #if T == float  outer_transform_size >>= 1;
 
+  // Do the first butterfly if we are doing a real-valued inverse transform.
   #if !forward && T == float {
     prepare_real_inverse(fft_data, signal.data, spectrum.data, signal.count);
   }
 
-  // Plan the FFT steps
+  // Plan the FFT steps, and figure out what size the base case will be.
   base_case_size := outer_transform_size;
   kernel_steps := 0;
   while base_case_size > BASE_CASE_MAX_SIZE {
@@ -96,56 +106,55 @@ run_fft :: (using fft_data: *FFT_Data, signal: [] $T, spectrum: [] Complex, $for
     kernel_steps += 1;
   }
 
+  // Do the Stockham autosort algorithm, shuffling the order to prepare for the base case.
   for step: 0..kernel_steps-1 {
     N := outer_transform_size >> (step*LOG2_RADIX);
     autosort_radix8(fft_data, in, out, N, outer_transform_size);
     Swap(*in, *out);
   }
 
+  // Execute the base-case hardcoded DFT.
   #if forward {
     base_case_forward_dft(fft_data, in, out, base_case_size, outer_transform_size);
   } else {
     base_case_inverse_dft(fft_data, in, out, base_case_size, outer_transform_size);
   }
 
+  // Do the main FFT algorithm, the 'butterfly.'
   for < step: kernel_steps-1..0 { // Note: Reversed step order, unwinding "recursion"
     Swap(*in, *out);
 
     N := outer_transform_size >> (step*LOG2_RADIX);
     B := N >> LOG2_RADIX;
 
-    // Dispatch a kernel depending on CPU featureset and current block size
-    // Note: our SSE implementation is so slow that it's better to just call the generic cpu 
-    // version.
+    // Dispatch a kernel depending on CPU featureset and current block size.
     if        simd_support == .AVX512 && B >= 8 {
       butterfly_radix8_simd(fft_data, in, out, N, outer_transform_size, forward, .AVX512);
     } else if simd_support >= .AVX    && B >= 4 {
       butterfly_radix8_simd(fft_data, in, out, N, outer_transform_size, forward, .AVX);
     } else if simd_support >= .SSE3   && B >= 2 {
       butterfly_radix8_simd(fft_data, in, out, N, outer_transform_size, forward, .SSE3_128);
-    //} else if simd_support >= .SSE    && B >= 2 {
-      //butterfly_radix8_simd(fft_data, in, out, N, outer_transform_size, forward, .SSE_128);
     } else if simd_support >= .SSE3 {
       butterfly_radix8_simd(fft_data, in, out, N, outer_transform_size, forward, .SSE3_64);
-    //} else if simd_support >= .SSE {
-      //butterfly_radix8_simd(fft_data, in, out, N, outer_transform_size, forward, .SSE_64);
     } else {
-      // Worst case fallback, we're not running on a supported architecture (currently just x86_64)
+      // Worst case fallback, we're not running on SSE3+. (Our SSE2 impl is slower than this version.)
       butterfly_radix8_any_cpu(fft_data, in, out, N, outer_transform_size, forward);
     }
   }
 
+  // Do the last butterfly step for a real-valued signal.
   #if forward && T == float {
     finalize_real_forward(fft_data, signal.data, spectrum.data, signal.count);
   }
 
+  // Scale inverse transform by 1/N, as is customary.
   #if !forward {
     for 0..outer_transform_size-1  out[it] = out[it] * (1.0 / outer_transform_size);
   }
 }
 
 autosort_radix8 :: (fft_data: *FFT_Data, in: *Complex, out: *Complex, N: int, total_input_size: int) {
-  n_iters := total_input_size / N;  // How many FFTs is this call doing?
+  n_iters := total_input_size / N;  // How many packed FFTs is this call doing?
   R :: 8;
   B := N >> LOG2_RADIX;
 
@@ -161,6 +170,7 @@ autosort_radix8 :: (fft_data: *FFT_Data, in: *Complex, out: *Complex, N: int, to
   }
 }
 
+// The SIMD, inline assembly version. 
 butterfly_radix8_simd :: (fft_data: *FFT_Data, in: *Complex, out: *Complex, N: int, total_input_size: int, forward := true, $simd_mode: Mode) {
   // For readability, bake the mode argument (compiletime) into each SIMD func.
   add   :: #bake_arguments complex_add(mode = simd_mode);
@@ -324,6 +334,112 @@ butterfly_radix8_simd :: (fft_data: *FFT_Data, in: *Complex, out: *Complex, N: i
   }
 }
 
+//
+// This is the scalar version of the above function. It gets called if we aren't running on x86_64, or
+// also actually if we only support SSE, because it's hard to optimize complex multiplication without SSE3.
+//
+butterfly_radix8_any_cpu:: (fft_data: *FFT_Data, in: *Complex, out: *Complex, N: int, total_input_size: int, forward := true) {
+  n_iters := total_input_size / N;  // How many FFTs is this call doing?
+
+  R :: 8;
+  B := N >> LOG2_RADIX;
+  log2_B := log2(B);
+
+  radix_mask := B - 1;
+
+  twiddles := ifx forward fft_data.forward_twiddles.data else fft_data.inverse_twiddles.data;
+  twiddles += twiddle_offset_for_size(N);
+
+  total_iters := total_input_size >> LOG2_RADIX;
+
+  for outer_iter: 0..total_iters-1 {
+    iter := outer_iter >> log2_B;
+    b := outer_iter & radix_mask;
+
+    N_iter_b := N*iter + b; 
+    b_mod := b & radix_mask;
+
+    iarr := N*iter + b;
+
+    in0 := in[iarr + 0*B];
+    in1 := in[iarr + 1*B];
+    in2 := in[iarr + 2*B];
+    in3 := in[iarr + 3*B];
+    in4 := in[iarr + 4*B];
+    in5 := in[iarr + 5*B];
+    in6 := in[iarr + 6*B];
+    in7 := in[iarr + 7*B];
+
+    w1 := twiddles[B*1 + b];
+    w2 := twiddles[B*2 + b];
+    w3 := twiddles[B*3 + b];
+    w4 := twiddles[B*4 + b];
+    w5 := twiddles[B*5 + b];
+    w6 := twiddles[B*6 + b];
+    w7 := twiddles[B*7 + b];
+
+    t0 := in0;
+    t1 := w1*in1;
+    t2 := w2*in2;
+    t3 := w3*in3;
+    t4 := w4*in4;
+    t5 := w5*in5;
+    t6 := w6*in6;
+    t7 := w7*in7;
+
+    // These constants multiply certain twiddles for the final output
+    //j :: #run imag(1);
+    pj :: Complex.{0.0, 1.0};
+    nj :: Complex.{0.0, -1.0};
+
+    wfwd :: #run unit_polar(-TAU*1/8);    // sqrt(2) - sqrt(2)*j
+    winv :: #run unit_polar(TAU*1/8);  
+    w1_8 := ifx forward then wfwd else winv;
+    j    := ifx forward then pj else nj;
+
+    t0p4 := in0 + t4;
+    t0m4 := in0 - t4;
+    t1p5 := t1 + t5;
+    t1m5 := t1 - t5;
+    t2p6 := t2 + t6;
+    t2m6 := t2 - t6;
+    t3p7 := t3 + t7;
+    t3m7 := t3 - t7;
+
+    {
+      fst := t0p4 + t2p6;
+      snd := t1p5 + t3p7;
+      out[iarr + 0*B] = fst + snd;
+      out[iarr + 4*B] = fst - snd;
+    }
+
+    {
+      fst := t0p4 - t2p6;
+      snd := j*(-t1p5 + t3p7);
+      out[iarr + 2*B] = fst + snd;
+      out[iarr + 6*B] = fst - snd;
+    }
+
+    {
+      fst := t0m4 - j*t2m6;
+      snd := w1_8*(t1m5 - j*t3m7);
+      out[iarr + 1*B] = fst + snd;
+      out[iarr + 5*B] = fst - snd;
+    }
+
+    {
+      fst := t0m4 + j*t2m6;
+      snd := w1_8*(-j*t1m5 + t3m7);
+      out[iarr + 3*B] = fst + snd;
+      out[iarr + 7*B] = fst - snd;
+    }
+  }
+}
+
+//
+// These base case functions just perform the simple, naive DFT at size 1, 2, or 4.
+// All the twiddle factors are +/- 1 or j, so we don't have to do actual complex multiplication.
+//
 base_case_forward_dft :: (fft_data: *FFT_Data, in: *Complex, out: *Complex, N: int, total_input_size: int) {
   n_iters := total_input_size / N;
 
@@ -427,7 +543,7 @@ finalize_real_forward :: (using fft: *FFT_Data, signal: *float32, spectrum: *Com
     }
   }
 
-  stride := 2*max_complex_transform_size/N;  // @Speed
+  stride := 2*max_complex_transform_size/N;
 
   for k: 0..N_div_2-1 {
     fst := Xe[k];
@@ -445,8 +561,7 @@ prepare_real_inverse :: (using fft: *FFT_Data, signal: *float32, spectrum: *Comp
   Xe := cast(*Complex) signal;   // Future inplace Stockham ish
   Xo := spectrum;
 
-  stride := 2*max_complex_transform_size/N;  // @Speed
-  //stride := max_complex_transform_size/N;  // @Speed
+  stride := 2*max_complex_transform_size/N;
 
   // Similar to finalize_real_inverse, this has to write in both directions at once.
   for k: 0..(N_div_2 >> 1) {  
@@ -522,116 +637,9 @@ j :: Complex.{0.0, 1.0};
 #import "Math";
 x64 :: #import "Machine_X64";
 
+#load "simd_helpers.jai";
+
 // This is obviously dumb, but if we were really going to optimize storage, the 
 // offset wouldn't just be N. Maybe that will happen in the future.
 twiddle_offset_for_size :: (N: int) -> int #expand  { return N; }
 
-
-// This version demonstrates, in scalar code, the formulation that will take 
-// advantage of SIMD registers.
-
-// It's also the fastest non-SIMD version of this function, faster than all the 
-// others in reference_slow_ffts.jai, so we use it as a fallback if we don't 
-// detect any SIMD featureset.
-
-// You still want to avoid calling this function though; the SIMD versions are 
-// way faster even when they are only loading one complex number at a time, 
-// probably because more care went into the loads/stores/register allocation.
-
-butterfly_radix8_any_cpu:: (fft_data: *FFT_Data, in: *Complex, out: *Complex, N: int, total_input_size: int, forward := true) {
-  n_iters := total_input_size / N;  // How many FFTs is this call doing?
-
-  R :: 8;
-  B := N >> LOG2_RADIX;
-  log2_B := log2(B);
-
-  radix_mask := B - 1;
-
-  twiddles := ifx forward fft_data.forward_twiddles.data else fft_data.inverse_twiddles.data;
-  twiddles += twiddle_offset_for_size(N);
-
-  total_iters := total_input_size >> LOG2_RADIX;
-
-  for outer_iter: 0..total_iters-1 {
-    iter := outer_iter >> log2_B;
-    b := outer_iter & radix_mask;
-
-    N_iter_b := N*iter + b; 
-    b_mod := b & radix_mask;
-
-    iarr := N*iter + b;
-
-    in0 := in[iarr + 0*B];
-    in1 := in[iarr + 1*B];
-    in2 := in[iarr + 2*B];
-    in3 := in[iarr + 3*B];
-    in4 := in[iarr + 4*B];
-    in5 := in[iarr + 5*B];
-    in6 := in[iarr + 6*B];
-    in7 := in[iarr + 7*B];
-
-    w1 := twiddles[B*1 + b];
-    w2 := twiddles[B*2 + b];
-    w3 := twiddles[B*3 + b];
-    w4 := twiddles[B*4 + b];
-    w5 := twiddles[B*5 + b];
-    w6 := twiddles[B*6 + b];
-    w7 := twiddles[B*7 + b];
-
-    t0 := in0;
-    t1 := w1*in1;
-    t2 := w2*in2;
-    t3 := w3*in3;
-    t4 := w4*in4;
-    t5 := w5*in5;
-    t6 := w6*in6;
-    t7 := w7*in7;
-
-    // These constants multiply certain twiddles for the final output
-    //j :: #run imag(1);
-    pj :: Complex.{0.0, 1.0};
-    nj :: Complex.{0.0, -1.0};
-
-    wfwd :: #run unit_polar(-TAU*1/8);    // sqrt(2) - sqrt(2)*j
-    winv :: #run unit_polar(TAU*1/8);  
-    w1_8 := ifx forward then wfwd else winv;
-    j    := ifx forward then pj else nj;
-
-    t0p4 := in0 + t4;
-    t0m4 := in0 - t4;
-    t1p5 := t1 + t5;
-    t1m5 := t1 - t5;
-    t2p6 := t2 + t6;
-    t2m6 := t2 - t6;
-    t3p7 := t3 + t7;
-    t3m7 := t3 - t7;
-
-    {
-      fst := t0p4 + t2p6;
-      snd := t1p5 + t3p7;
-      out[iarr + 0*B] = fst + snd;
-      out[iarr + 4*B] = fst - snd;
-    }
-
-    {
-      fst := t0p4 - t2p6;
-      snd := j*(-t1p5 + t3p7);
-      out[iarr + 2*B] = fst + snd;
-      out[iarr + 6*B] = fst - snd;
-    }
-
-    {
-      fst := t0m4 - j*t2m6;
-      snd := w1_8*(t1m5 - j*t3m7);
-      out[iarr + 1*B] = fst + snd;
-      out[iarr + 5*B] = fst - snd;
-    }
-
-    {
-      fst := t0m4 + j*t2m6;
-      snd := w1_8*(-j*t1m5 + t3m7);
-      out[iarr + 3*B] = fst + snd;
-      out[iarr + 7*B] = fst - snd;
-    }
-  }
-}
