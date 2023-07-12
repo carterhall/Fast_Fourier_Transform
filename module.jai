@@ -1,4 +1,4 @@
-#module_parameters(MAX_SIZE_TO_PRECOMPUTE := 0, DISABLE_ASSERTS := false);
+#module_parameters(PRECOMPUTED_GLOBAL_FFT_SIZE := 0, DISABLE_ASSERTS := false);
 
 // These constants are named here for clarity, but they cannot be changed: this FFT implementation
 // is hardcoded for radix-8, with a base case DFT at size 4 and below.
@@ -15,14 +15,17 @@ FFT_Data :: struct {
 }
 
 //
-// The easy, global API (just calls the below functions with a global FFT_Data struct.)
+// The easy, global API (just calls the normal API functions with a global FFT_Data struct.)
 //
 forward :: (signal: [] $T, spectrum: [] Complex) { forward(*global_fft, signal, spectrum); }
 inverse :: (spectrum: [] Complex, signal: [] $T) { inverse(*global_fft, spectrum, signal); }
 
 // Jai is awesome! We can bake precomputed FFT_Data structs into the executable.
-#if MAX_SIZE_TO_PRECOMPUTE > 0  global_fft :: #run prepare_fft(MAX_SIZE_TO_PRECOMPUTE, true);
-else global_fft: FFT_Data;
+#if PRECOMPUTED_GLOBAL_FFT_SIZE > 0 {
+  global_fft :: #run prepare_fft(PRECOMPUTED_GLOBAL_FFT_SIZE, true);
+} else {
+  global_fft: FFT_Data;
+}
 
 //
 // Normal FFT API: forward() and inverse(); prepare_fft() and free_fft().
