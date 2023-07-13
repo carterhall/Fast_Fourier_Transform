@@ -83,6 +83,8 @@ On modern CPUs, committing to radix-8 maximizes performance\*simplicity. The rad
 
 ![DFT](https://wikimedia.org/api/rest_v1/media/math/render/svg/9b1598508ebb847e6c726d5b741ae2363d84f616)
 
+(this will not show up well on GitHub dark mode, sorry!)
+
 The `O(N log(N))` FFT algorithm is made possible by re-indexing and rearranging this formula. We will split the input array into `N1` blocks of size `N2`, and define new indices `k1` and `n1` (each running from `0..N1-1`) and `k2` and `n2` (running from `0..N2-1`).
 
 The output index `k` can now be rewritten as `N2*k1 + k2`, and the input index `n` can be rewritten `N1*n2 + n1`, in the complicated-looking formula
