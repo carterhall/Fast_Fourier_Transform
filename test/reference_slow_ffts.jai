@@ -1,3 +1,11 @@
+//
+// This file is full of a bunch of different transform implementations that I wrote on the 
+// way to the final versions.
+//
+// An actual optimized FFT is pretty hard to read, so it seemed like a good idea to leave
+// this progression of FFTs in the repo somewhere.
+//
+
 // These naive DFTs were validated against numpy.fft's fft() and ifft(), with
 // N=8. See reference.py.
 naive_forward_dft :: (x: [] Complex, X: [] Complex) {
