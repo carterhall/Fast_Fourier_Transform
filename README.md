@@ -2,6 +2,8 @@
 
 A fast, lightweight FFT written in [Jai](https://github.com/Jai-Community/Jai-Community-Library/wiki), intended for realtime audio applications. MIT licensed.
 
+This repo is structured as a Jai module; you should be able to just clone it into your modules directory.
+
 ## Example (simple, global API)
   
     FFT :: #import "Fast_Fourier_Transform"(512);  // At compiletime, prepare FFTs up to size 512
@@ -101,7 +103,7 @@ We use the Stockham auto-sort algorithm, which entails passing intermediate valu
 
 ### Real-valued FFTs
 
-For many applications, you will only ever want to perform FFTs on real-valued signals. It would be wasteful to do transforms on buffers that are half zeros, but luckily, it's not too hard to get 2 FFTs for the price of ~1 if the signal is known to be real. [This post](http://www.robinscheibler.org/2013/02/13/real-fft.html) explains it concisely.
+For many applications, you will only ever want to perform FFTs on real-valued signals. It would be wasteful to do transforms on buffers that are half zeros, but luckily, it's not too hard to get 2 FFTs for the price of ~1 if the signal is known to be real. [This post](http://www.robinscheibler.org/2013/02/13/real-fft.html) explains it concisely. These optimizations are applied automatically if you call `forward` or `inverse` with a signal of type float32.
 
 ### Performance, SIMD, inline assembly
 
