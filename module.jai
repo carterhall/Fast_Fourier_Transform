@@ -63,6 +63,9 @@ free_fft :: (using fft_data: *FFT_Data) {
   array_free(real_signal_twiddles);
 }
 
+
+#scope_file
+
 //
 // This function takes parameters from the above API functions, and performs the required FFT, handling
 // real/complex signals, forward/inverse transforms, and various input sizes.
@@ -593,15 +596,6 @@ prepare_real_inverse :: (using fft: *FFT_Data, signal: *float32, spectrum: *Comp
   for k: 0..N/2-1  spectrum[k] = Xe[k] + j*Xo[k];
 }
 
-check_simd_support :: () -> SIMD_Support {
-  cpu_features := x64.get_cpu_info().feature_leaves;
-  if x64.check_feature(cpu_features, x64.x86_Feature_Flag.AVX512F) return .AVX512;
-  if x64.check_feature(cpu_features, x64.x86_Feature_Flag.AVX)     return .AVX;
-  if x64.check_feature(cpu_features, x64.x86_Feature_Flag.SSE3)    return .SSE3;
-  if x64.check_feature(cpu_features, x64.x86_Feature_Flag.SSE)     return .SSE;
-  return .NONE;
-}
-
 precompute_twiddles:: (N: int, forward: bool) -> [] Complex {
   twiddles := NewArray(2*N, Complex);
 
@@ -627,12 +621,26 @@ precompute_twiddles:: (N: int, forward: bool) -> [] Complex {
 }
 
 
-// Unclear whether to export these or not...
+#scope_export
+
+// These little helpers may be useful to higher level code using the FFT, like convolutions,
+// spectrum analyzers, etc.
+
+check_simd_support :: () -> SIMD_Support {
+  cpu_features := x64.get_cpu_info().feature_leaves;
+  if x64.check_feature(cpu_features, x64.x86_Feature_Flag.AVX512F) return .AVX512;
+  if x64.check_feature(cpu_features, x64.x86_Feature_Flag.AVX)     return .AVX;
+  if x64.check_feature(cpu_features, x64.x86_Feature_Flag.SSE3)    return .SSE3;
+  if x64.check_feature(cpu_features, x64.x86_Feature_Flag.SSE)     return .SSE;
+  return .NONE;
+}
+
 log2 :: (x: $T) -> T {  y := 0;  while 1 << y < x  y += 1;  return y;  }
 next_power_of_2 :: (x: $T) -> T {  y := 1;  while y < x  y <<= 1;  return y;  }
 unit_polar :: (theta: float) -> Complex { return .{ cos(theta), sin(theta) }; }
 conj :: (z: Complex) -> Complex #expand { return .{ z.x, -z.y }; }
 j :: Complex.{0.0, 1.0};
+
 
 #scope_file 
 
