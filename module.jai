@@ -82,7 +82,7 @@ run_fft :: (using fft_data: *FFT_Data, signal: [] $T, spectrum: [] Complex, $for
            "signal length % is not a power of 2!", signal.count);
     assert(signal.count == spectrum.count,
            "signal length % does not equal spectrum length %!", signal.count, spectrum.count);
-    max_allowed := max_complex_transform_size << #ifx T==float32 then 1; else 0;
+    max_allowed := max_complex_transform_size << #ifx T==float32 then 1 else 0;
     assert(signal.count <= max_allowed,
            "signal length % is larger than the max allowed (%)!", signal.count, max_allowed);
   }

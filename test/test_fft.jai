@@ -37,7 +37,7 @@ run_test :: (N: int, $T_signal: Type, simd_support: FFT.SIMD_Support, correct_ou
   defer { free(_m1); free(_m2); free(_m3); free(_m4); }
 
   // Make sure we can work with transform prepared for size N/2, for real transform size N
-  fft_data := FFT.prepare_fft(#ifx T_signal==float32 then N/2; else N;); 
+  fft_data := FFT.prepare_fft(#ifx T_signal==float32 then N/2 else N); 
   defer FFT.free_fft(*fft_data);
   FFT.simd_support = simd_support;
 
